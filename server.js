@@ -2,7 +2,7 @@
 // Expo Push Server
 // - POST /register { token, language, tz }
 //   -> stores token and sends a ONE-TIME welcome push immediately
-// - EVERY 30 MINUTES: broadcasts to all tokens (debug schedule)
+// - EVERY 60 MINUTES: broadcasts to all tokens (debug schedule 1h)
 // - POST /test -> send immediately (debug)
 
 const express = require("express");
@@ -31,21 +31,21 @@ async function sendExpoPush(messages) {
   return data;
 }
 
-function build30mMessage(token, meta) {
+function build1hMessage(token, meta) {
   const lang = meta.language || "id";
   const title = "Destiny 2026 ✨";
 
   const body =
     lang === "vi"
-      ? "Có một lời nhắc mới. Mở app để xem thông điệp ✨"
-      : "Ada pengingat baru. Buka aplikasi untuk melihat pesan ✨";
+      ? "Test server: 1 giờ bắn 1 lần. Mở app để xem thông điệp ✨"
+      : "Tes server: tiap 1 jam. Buka aplikasi untuk melihat pesan ✨";
 
   return {
     to: token,
     title,
     body,
     sound: "default",
-    data: { target: "TodayHome", kind: "push_30m" },
+    data: { target: "TodayHome", kind: "push_1h" },
     channelId: "daily",
   };
 }
@@ -56,8 +56,8 @@ function buildWelcomeMessage(token, meta) {
 
   const body =
     lang === "vi"
-      ? "Đã bật thông báo. Tạm thời: 30 phút nhận 1 lần để test."
-      : "Notifikasi aktif. Sementara: tiap 30 menit untuk tes.";
+      ? "Đã bật thông báo. Tạm thời: 1 giờ nhận 1 lần để test."
+      : "Notifikasi aktif. Sementara: tiap 1 jam untuk tes.";
 
   return {
     to: token,
@@ -69,7 +69,7 @@ function buildWelcomeMessage(token, meta) {
   };
 }
 
-async function broadcast30m() {
+async function broadcast1h() {
   if (tokens.size === 0) {
     console.log("No tokens to send");
     return;
@@ -77,10 +77,10 @@ async function broadcast30m() {
 
   const batch = [];
   for (const [token, meta] of tokens.entries()) {
-    batch.push(build30mMessage(token, meta));
+    batch.push(build1hMessage(token, meta));
   }
 
-  console.log(`Broadcast 30m count=${batch.length}`);
+  console.log(`Broadcast 1h count=${batch.length}`);
   await sendExpoPush(batch);
 }
 
@@ -88,7 +88,11 @@ async function broadcast30m() {
 app.post("/register", async (req, res) => {
   const { token, language, tz, app: appName } = req.body || {};
 
-  if (!token || typeof token !== "string" || !token.startsWith("ExponentPushToken")) {
+  if (
+    !token ||
+    typeof token !== "string" ||
+    !token.startsWith("ExponentPushToken")
+  ) {
     return res.status(400).send("invalid token");
   }
 
@@ -127,15 +131,15 @@ app.post("/test", async (req, res) => {
 
   const batch = [];
   for (const [token, meta] of tokens.entries()) {
-    batch.push(build30mMessage(token, meta));
+    batch.push(build1hMessage(token, meta));
   }
   await sendExpoPush(batch);
   res.json({ ok: true, count: tokens.size });
 });
 
-// ✅ Every 30 minutes (at minute 0 and 30)
+// ✅ Every 60 minutes (at minute 0)
 const TZ = "Asia/Bangkok";
-cron.schedule("*/30 * * * *", () => broadcast30m(), { timezone: TZ });
+cron.schedule("0 * * * *", () => broadcast1h(), { timezone: TZ });
 
 const PORT = process.env.PORT || 4000;
 app.listen(PORT, () => console.log("Push server listening on", PORT));
