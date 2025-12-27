@@ -1,0 +1,16 @@
+{
+  "name": "push-server",
+  "version": "1.0.0",
+  "description": "Expo push notification server for Destiny apps",
+  "main": "server.js",
+  "scripts": {
+    "start": "node server.js"
+  },
+  "author": "",
+  "license": "ISC",
+  "dependencies": {
+    "express": "^4.19.2",
+    "cors": "^2.8.5",
+    "node-cron": "^4.2.1"
+  }
+}
