@@ -1,10 +1,14 @@
 // server.js
-// Expo Push Server (Render)
-// - POST /register { token, language, tz, app }
-//   -> stores token (PERSISTED) + sends ONE-TIME welcome immediately
-// - CRON: every hour -> broadcast to all tokens
-// - POST /test -> send immediately (debug)
+// Expo Push Server (Render) - CLEAN & DỨT ĐIỂM
+// - POST /register { token, language, tz, app } -> store token (PERSISTED)
+// - CRON: 07:00 / 12:00 / 20:00 (Asia/Bangkok) -> broadcast to all tokens
 // - GET /ping, /stats -> quick debug
+//
+// ✅ DỨT ĐIỂM:
+// - ❌ KHÔNG gửi welcome ngay khi register
+// - ❌ KHÔNG có /test
+// - ✅ Chỉ có 3 mốc 07/12/20
+// - ✅ Có "FINGERPRINT" để kiểm tra Render đang chạy đúng bản này
 
 const express = require("express");
 const cors = require("cors");
@@ -12,7 +16,7 @@ const cron = require("node-cron");
 const fs = require("fs");
 const path = require("path");
 
-// ✅ fetch fallback (Node version on Render may vary)
+// Node 18+ có fetch sẵn. Nếu môi trường không có, fallback:
 if (typeof fetch === "undefined") {
   // eslint-disable-next-line global-require
   global.fetch = require("node-fetch");
@@ -22,14 +26,19 @@ const app = express();
 app.use(cors());
 app.use(express.json());
 
-// ✅ Prefer Render persistent disk path if mounted
-// If you add a Disk in Render at /var/data, tokens survive redeploy/restart.
+// ---------- FINGERPRINT (để biết Render đang chạy đúng code này) ----------
+const FINGERPRINT = `clean-${new Date().toISOString()}`;
+console.log("BOOT FINGERPRINT =", FINGERPRINT);
+
+// Prefer Render persistent disk path if mounted (Render Disk at /var/data)
 const DEFAULT_TOKENS_PATH = "/var/data/tokens.json";
 const TOKENS_PATH =
   process.env.TOKENS_PATH ||
-  (fs.existsSync("/var/data") ? DEFAULT_TOKENS_PATH : path.join(__dirname, "tokens.json"));
+  (fs.existsSync("/var/data")
+    ? DEFAULT_TOKENS_PATH
+    : path.join(__dirname, "tokens.json"));
 
-// token -> { language, tz, app, updatedAt, welcomed }
+// token -> { language, tz, app, updatedAt }
 const tokens = new Map();
 
 // ---------- persistence helpers ----------
@@ -49,6 +58,7 @@ function loadTokensFromDisk() {
     const raw = fs.readFileSync(TOKENS_PATH, "utf8");
     const obj = raw ? JSON.parse(raw) : {};
     let count = 0;
+
     for (const [token, meta] of Object.entries(obj || {})) {
       if (token && meta) {
         tokens.set(token, meta);
@@ -75,7 +85,7 @@ function scheduleSaveTokensToDisk() {
       } catch (e) {
         console.log("TOKENS save error:", e);
       }
-    }, 400); // debounce
+    }, 400);
   } catch {}
 }
 
@@ -86,7 +96,7 @@ loadTokensFromDisk();
 app.get("/", (_, res) => res.send("push server ok"));
 
 app.get("/ping", (_, res) => {
-  res.json({ ok: true, tokenCount: tokens.size, time: Date.now() });
+  res.json({ ok: true, tokenCount: tokens.size, time: Date.now(), fingerprint: FINGERPRINT });
 });
 
 app.get("/stats", (_, res) => {
@@ -96,6 +106,7 @@ app.get("/stats", (_, res) => {
     tokensPath: TOKENS_PATH,
     hasVarData: fs.existsSync("/var/data"),
     now: new Date().toISOString(),
+    fingerprint: FINGERPRINT,
   });
 });
 
@@ -107,6 +118,7 @@ async function sendExpoPush(messages) {
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify(messages),
   });
+
   const text = await res.text().catch(() => "");
   let data = {};
   try {
@@ -114,11 +126,12 @@ async function sendExpoPush(messages) {
   } catch {
     data = { raw: text };
   }
+
   console.log("Expo response:", JSON.stringify(data));
   return data;
 }
 
-// chunk to <=100 (Expo recommended)
+// chunk <=100
 async function sendInBatches(allMessages, batchSize = 100) {
   for (let i = 0; i < allMessages.length; i += batchSize) {
     const batch = allMessages.slice(i, i + batchSize);
@@ -127,45 +140,44 @@ async function sendInBatches(allMessages, batchSize = 100) {
   }
 }
 
-function build1hMessage(token, meta) {
+function buildDailyMessage(token, meta, slot) {
   const lang = meta.language || "id";
   const title = "Destiny 2026 ✨";
 
+  const viBodies = {
+    "07:00":
+      "Chào buổi sáng ✨ Năng lượng hôm nay đang mở. Xem dự đoán, màu may mắn và điều cần ưu tiên.",
+    "12:00":
+      "Giữa ngày rồi ✨ Kiểm tra lại hướng đi: công việc, cảm xúc và một gợi ý nhỏ để bẻ lái kịp lúc.",
+    "20:00":
+      "Buổi tối ✨ Hạ nhịp một chút. Xem tổng kết năng lượng và lời nhắc để ngủ yên, mai sáng nhẹ đầu.",
+  };
+
+  const idBodies = {
+    "07:00":
+      "Selamat pagi ✨ Energi hari ini sedang terbuka. Cek prediksi, warna hoki, dan fokus utamamu.",
+    "12:00":
+      "Siang ini ✨ Saatnya cek arah: kerja, emosi, dan satu petunjuk kecil biar langkahmu tetap pas.",
+    "20:00":
+      "Malam ini ✨ Turunkan ritme. Lihat ringkasan energi dan pesan penutup untuk tidur lebih tenang.",
+  };
+
   const body =
     lang === "vi"
-      ? "Test server: 1 giờ bắn 1 lần. Mở app để xem thông điệp ✨"
-      : "Tes server: tiap 1 jam. Buka aplikasi untuk melihat pesan ✨";
+      ? viBodies[slot] || "Thông điệp hôm nay đã sẵn sàng. Mở app để xem ✨"
+      : idBodies[slot] || "Pesan hari ini sudah siap. Buka aplikasi để melihat ✨";
 
   return {
     to: token,
     title,
     body,
     sound: "default",
-    data: { target: "TodayHome", kind: "push_1h" },
+    data: { target: "TodayHome", kind: "push_daily", slot },
     channelId: "daily",
   };
 }
 
-function buildWelcomeMessage(token, meta) {
-  const lang = meta.language || "id";
-  const title = "Destiny 2026 ✨";
-
-  const body =
-    lang === "vi"
-      ? "Đã bật thông báo. Server sẽ gửi 1 giờ/lần để test."
-      : "Notifikasi aktif. Server kirim tiap 1 jam untuk tes.";
-
-  return {
-    to: token,
-    title,
-    body,
-    sound: "default",
-    data: { target: "TodayHome", kind: "push_welcome" },
-    channelId: "daily",
-  };
-}
-
-async function broadcast1h() {
+async function broadcastDaily(slot) {
   if (tokens.size === 0) {
     console.log("No tokens to send");
     return;
@@ -173,10 +185,10 @@ async function broadcast1h() {
 
   const all = [];
   for (const [token, meta] of tokens.entries()) {
-    all.push(build1hMessage(token, meta));
+    all.push(buildDailyMessage(token, meta, slot));
   }
 
-  console.log(`Broadcast 1h count=${all.length}`);
+  console.log(`[PUSH_DAILY] slot=${slot} count=${all.length}`);
   await sendInBatches(all, 100);
 }
 
@@ -190,7 +202,7 @@ function isValidExpoToken(token) {
   );
 }
 
-// ✅ Register + welcome (one-time)
+// ✅ Register ONLY (no welcome, no test)
 app.post("/register", async (req, res) => {
   try {
     const { token, language, tz, app: appName } = req.body || {};
@@ -199,39 +211,24 @@ app.post("/register", async (req, res) => {
       return res.status(400).send("invalid token");
     }
 
-    const prev = tokens.get(token);
-
     const meta = {
       language: language === "vi" ? "vi" : "id",
       tz: tz || "Asia/Bangkok",
       app: appName || "destiny-2026",
       updatedAt: Date.now(),
-      welcomed: prev?.welcomed === true,
     };
 
     tokens.set(token, meta);
     scheduleSaveTokensToDisk();
-    console.log("REGISTER:", token, meta);
 
-    // Send welcome only once per token
-    if (!meta.welcomed) {
-      try {
-        console.log("WELCOME -> sending now...");
-        await sendExpoPush([buildWelcomeMessage(token, meta)]);
-        meta.welcomed = true;
-        tokens.set(token, meta);
-        scheduleSaveTokensToDisk();
-        console.log("WELCOME -> sent");
-      } catch (e) {
-        console.log("WELCOME send error:", e);
-      }
-    }
+    console.log("[REGISTER]", token, meta);
+    // ❌ intentionally NO welcome push here
 
     res.json({
       ok: true,
-      welcomed: meta.welcomed,
       tokenCount: tokens.size,
       tokensPath: TOKENS_PATH,
+      fingerprint: FINGERPRINT,
     });
   } catch (e) {
     console.log("REGISTER error:", e);
@@ -239,23 +236,18 @@ app.post("/register", async (req, res) => {
   }
 });
 
-// Manual test: send immediately to all
-app.post("/test", async (req, res) => {
-  if (tokens.size === 0) return res.json({ ok: true, count: 0 });
+// ✅ Block unknown GET routes (đỡ bị soi/ gọi nhầm)
+app.get("*", (req, res) => res.status(404).send("not found"));
+// ✅ Block unknown POST routes (đỡ bị gọi nhầm /test cũ)
+app.post("*", (req, res) => res.status(404).send("not found"));
 
-  const all = [];
-  for (const [token, meta] of tokens.entries()) {
-    all.push(build1hMessage(token, meta));
-  }
-  await sendInBatches(all, 100);
-  res.json({ ok: true, count: tokens.size });
-});
-
-// ✅ Every hour at minute 0
+// ✅ Schedule at 07:00 / 12:00 / 20:00 (Asia/Bangkok)
 const TZ = "Asia/Bangkok";
-cron.schedule("0 * * * *", () => broadcast1h(), { timezone: TZ });
+cron.schedule("0 7 * * *", () => broadcastDaily("07:00"), { timezone: TZ });
+cron.schedule("0 12 * * *", () => broadcastDaily("12:00"), { timezone: TZ });
+cron.schedule("0 20 * * *", () => broadcastDaily("20:00"), { timezone: TZ });
 
 const PORT = process.env.PORT || 4000;
 app.listen(PORT, () =>
-  console.log("Push server listening on", PORT, "TOKENS_PATH=", TOKENS_PATH)
+  console.log("Push server listening on", PORT, "TOKENS_PATH=", TOKENS_PATH, "FINGERPRINT=", FINGERPRINT)
 );
